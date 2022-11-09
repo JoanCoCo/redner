@@ -54,6 +54,8 @@ def serialize_texture(texture, args, device):
         if mipmap.device != device:
             warnings.warn('Converting texture from {} to {}, this can be inefficient.'.format(mipmap.device, device))
         args.append(mipmap.to(device))
+    #assert(torch.isfinite(texture.mesh_colors_resolution).all())
+    args.append(texture.mesh_colors_resolution)
     assert(torch.isfinite(texture.uv_scale).all())
     args.append(texture.uv_scale.to(device))
 
@@ -393,6 +395,8 @@ class RenderFunction(torch.autograd.Function):
             for j in range(num_levels):
                 diffuse_reflectance.append(args[current_index])
                 current_index += 1
+            diffuse_mesh_colors_resolution = args[current_index]
+            current_index += 1
             diffuse_uv_scale = args[current_index]
             current_index += 1
             
@@ -402,6 +406,8 @@ class RenderFunction(torch.autograd.Function):
             for j in range(num_levels):
                 specular_reflectance.append(args[current_index])
                 current_index += 1
+            specular_mesh_colors_resolution = args[current_index]
+            current_index += 1
             specular_uv_scale = args[current_index]
             current_index += 1
             
@@ -411,6 +417,8 @@ class RenderFunction(torch.autograd.Function):
             for j in range(num_levels):
                 roughness.append(args[current_index])
                 current_index += 1
+            roughness_mesh_colors_resolution = args[current_index]
+            current_index += 1
             roughness_uv_scale = args[current_index]
             current_index += 1
 
@@ -421,9 +429,12 @@ class RenderFunction(torch.autograd.Function):
                 for j in range(num_levels):
                     generic_texture.append(args[current_index])
                     current_index += 1
+                generic_mesh_colors_resolution = args[current_index]
+                current_index += 1
                 generic_uv_scale = args[current_index]
                 current_index += 1
             else:
+                generic_mesh_colors_resolution = 0
                 generic_uv_scale = None
 
             num_levels = args[current_index]
@@ -433,9 +444,12 @@ class RenderFunction(torch.autograd.Function):
                 for j in range(num_levels):
                     normal_map.append(args[current_index])
                     current_index += 1
+                normal_map_mesh_colors_resolution = args[current_index]
+                current_index += 1
                 normal_map_uv_scale = args[current_index]
                 current_index += 1
             else:
+                normal_map_mesh_colors_resolution = 0
                 normal_map_uv_scale = None
 
             compute_specular_lighting = args[current_index]
@@ -447,9 +461,14 @@ class RenderFunction(torch.autograd.Function):
 
             if diffuse_reflectance[0].dim() == 1:
                 # Constant texture
+                num_levels = 0
+                height = 0
+                if diffuse_mesh_colors_resolution > 0:
+                    num_levels = 1
+                    height = int(diffuse_reflectance[0].size()[0] / 3 / int(((diffuse_mesh_colors_resolution+1) * (diffuse_mesh_colors_resolution+2)) / 2))
                 diffuse_reflectance = redner.Texture3(\
                     [redner.float_ptr(diffuse_reflectance[0].data_ptr())],
-                    [0], [0], 3,
+                    [0], [height], 3, diffuse_mesh_colors_resolution,
                     redner.float_ptr(diffuse_uv_scale.data_ptr()))
             else:
                 assert(diffuse_reflectance[0].dim() == 3)
@@ -458,13 +477,19 @@ class RenderFunction(torch.autograd.Function):
                     [x.shape[1] for x in diffuse_reflectance],
                     [x.shape[0] for x in diffuse_reflectance],
                     3,
+                    0,
                     redner.float_ptr(diffuse_uv_scale.data_ptr()))
 
             if specular_reflectance[0].dim() == 1:
                 # Constant texture
+                num_levels = 0
+                height = 0
+                if specular_mesh_colors_resolution > 0:
+                    num_levels = 1
+                    height = int(specular_reflectance[0].size()[0] / 3 / int(((specular_mesh_colors_resolution+1) * (specular_mesh_colors_resolution+2)) / 2))
                 specular_reflectance = redner.Texture3(\
                     [redner.float_ptr(specular_reflectance[0].data_ptr())],
-                    [0], [0], 3,
+                    [0], [height], 3, specular_mesh_colors_resolution,
                     redner.float_ptr(specular_uv_scale.data_ptr()))
             else:
                 assert(specular_reflectance[0].dim() == 3)
@@ -473,13 +498,19 @@ class RenderFunction(torch.autograd.Function):
                     [x.shape[1] for x in specular_reflectance],
                     [x.shape[0] for x in specular_reflectance],
                     3,
+                    0,
                     redner.float_ptr(specular_uv_scale.data_ptr()))
 
             if roughness[0].dim() == 1:
                 # Constant texture
+                num_levels = 0
+                height = 0
+                if roughness_mesh_colors_resolution > 0:
+                    num_levels = 1
+                    height = int(roughness[0].size()[0] / 3 / int(((roughness_mesh_colors_resolution+1) * (roughness_mesh_colors_resolution+2)) / 2))
                 roughness = redner.Texture1(\
                     [redner.float_ptr(roughness[0].data_ptr())],
-                    [0], [0], 1,
+                    [0], [height], 1, roughness_mesh_colors_resolution,
                     redner.float_ptr(roughness_uv_scale.data_ptr()))
             else:
                 assert(roughness[0].dim() == 3)
@@ -488,6 +519,7 @@ class RenderFunction(torch.autograd.Function):
                     [x.shape[1] for x in roughness],
                     [x.shape[0] for x in roughness],
                     1,
+                    0,
                     redner.float_ptr(roughness_uv_scale.data_ptr()))
 
             if len(generic_texture) > 0:
@@ -497,10 +529,11 @@ class RenderFunction(torch.autograd.Function):
                     [x.shape[1] for x in generic_texture],
                     [x.shape[0] for x in generic_texture],
                     generic_texture[0].shape[2],
+                    0,
                     redner.float_ptr(generic_uv_scale.data_ptr()))
             else:
                 generic_texture = redner.TextureN(\
-                    [], [], [], 0, redner.float_ptr(0))
+                    [], [], [], 0, 0, redner.float_ptr(0))
 
             if len(normal_map) > 0:
                 assert(normal_map[0].dim() == 3)
@@ -509,10 +542,11 @@ class RenderFunction(torch.autograd.Function):
                     [x.shape[1] for x in normal_map],
                     [x.shape[0] for x in normal_map],
                     3,
+                    0,
                     redner.float_ptr(normal_map_uv_scale.data_ptr()))
             else:
                 normal_map = redner.Texture3(\
-                    [], [], [], 0, redner.float_ptr(0))
+                    [], [], [], 0, 0, redner.float_ptr(0))
             materials.append(redner.Material(\
                 diffuse_reflectance,
                 specular_reflectance,
@@ -548,6 +582,8 @@ class RenderFunction(torch.autograd.Function):
             for j in range(num_levels):
                 values.append(args[current_index])
                 current_index += 1
+            values_mesh_colors = args[current_index]
+            current_index += 1
             envmap_uv_scale = args[current_index]
             current_index += 1
             env_to_world = args[current_index]
@@ -567,6 +603,7 @@ class RenderFunction(torch.autograd.Function):
                 [x.shape[1] for x in values], # width
                 [x.shape[0] for x in values], # height
                 3, # channels
+                0,
                 redner.float_ptr(envmap_uv_scale.data_ptr()))
             envmap = redner.EnvironmentMap(\
                 values,
@@ -791,7 +828,11 @@ class RenderFunction(torch.autograd.Function):
         buffers.d_materials = []
         for material in ctx.materials:
             if material.get_diffuse_size(0)[0] == 0:
-                d_diffuse = [torch.zeros(3, device = device)]
+                if material.get_diffuse_size(0)[2] <= 0:
+                    d_diffuse = [torch.zeros(3, device = device)]
+                else:
+                    diffuse_size = material.get_diffuse_size(0)
+                    d_diffuse = [torch.zeros(diffuse_size[1] * int((diffuse_size[2]+1) * (diffuse_size[2]+2) / 2) * 3, device=device)]
             else:
                 d_diffuse = []
                 for l in range(material.get_diffuse_levels()):
@@ -802,7 +843,11 @@ class RenderFunction(torch.autograd.Function):
                                     3, device = device))
 
             if material.get_specular_size(0)[0] == 0:
-                d_specular = [torch.zeros(3, device = device)]
+                if material.get_specular_size(0)[2] <= 0:
+                    d_specular = [torch.zeros(3, device = device)]
+                else:
+                    specular_size = material.get_specular_size(0)
+                    d_specular = [torch.zeros(specular_size[1] * int((specular_size[2]+1) * (specular_size[2]+2) / 2) * 3, device=device)]
             else:
                 d_specular = []
                 for l in range(material.get_specular_levels()):
@@ -813,7 +858,11 @@ class RenderFunction(torch.autograd.Function):
                                     3, device = device))
 
             if material.get_roughness_size(0)[0] == 0:
-                d_roughness = [torch.zeros(1, device = device)]
+                if material.get_roughness_size(0)[2] <= 0:
+                    d_roughness = [torch.zeros(1, device = device)]
+                else:
+                    roughness_size = material.get_roughness_size(0)
+                    d_roughness = [torch.zeros(roughness_size[1] * int((roughness_size[2]+1) * (roughness_size[2]+2) / 2), device=device)]
             else:
                 d_roughness = []
                 for l in range(material.get_roughness_levels()):
@@ -824,7 +873,11 @@ class RenderFunction(torch.autograd.Function):
                                     1, device = device))
 
             if material.get_generic_levels() == 0:
-                d_generic = None
+                if material.get_generic_size(0)[3] <= 0:
+                    d_generic = None
+                else:
+                    generic_size = material.get_generic_size(0)
+                    d_generic = [torch.zeros(generic_size[2] * int((generic_size[3]+1) * (generic_size[3]+2) / 2) * generic_size[0], device=device)]
             else:
                 d_generic = []
                 for l in range(material.get_generic_levels()):
@@ -835,7 +888,11 @@ class RenderFunction(torch.autograd.Function):
                                     generic_size[0], device = device))
 
             if material.get_normal_map_levels() == 0:
-                d_normal_map = None
+                if material.get_normal_map_size(0)[2] <= 0:
+                    d_normal_map = None
+                else:
+                    normal_map_size = material.get_normal_map_size(0)
+                    d_normal_map = [torch.zeros(normal_map_size[1] * int((normal_map_size[2]+1) * (normal_map_size[2]+2) / 2) * 3, device=device)]
             else:
                 d_normal_map = []
                 for l in range(material.get_normal_map_levels()):
@@ -868,70 +925,108 @@ class RenderFunction(torch.autograd.Function):
             buffers.d_generic_uv_scale_list.append(d_generic_uv_scale)
             buffers.d_normal_map_uv_scale_list.append(d_normal_map_uv_scale)
             if d_diffuse[0].dim() == 1:
-                d_diffuse_tex = redner.Texture3(\
-                    [redner.float_ptr(d_diffuse[0].data_ptr())],
-                    [0],
-                    [0],
-                    3,
-                    redner.float_ptr(d_diffuse_uv_scale.data_ptr()))
+                if material.get_diffuse_size(0)[2] <= 0:
+                    d_diffuse_tex = redner.Texture3(\
+                        [redner.float_ptr(d_diffuse[0].data_ptr())],
+                        [0],
+                        [0],
+                        3,
+                        0,
+                        redner.float_ptr(d_diffuse_uv_scale.data_ptr()))
+                else:
+                    diffuse_size = material.get_diffuse_size(0)
+                    d_diffuse_tex = redner.Texture3(\
+                        [redner.float_ptr(d_diffuse[0].data_ptr())],
+                        [diffuse_size[0]],
+                        [diffuse_size[1]],
+                        3,
+                        diffuse_size[2],
+                        redner.float_ptr(d_diffuse_uv_scale.data_ptr()))
             else:
                 d_diffuse_tex = redner.Texture3(\
                     [redner.float_ptr(x.data_ptr()) for x in d_diffuse],
                     [x.shape[1] for x in d_diffuse],
                     [x.shape[0] for x in d_diffuse],
                     3,
+                    material.get_diffuse_size(0)[2],
                     redner.float_ptr(d_diffuse_uv_scale.data_ptr()))
 
             if d_specular[0].dim() == 1:
-                d_specular_tex = redner.Texture3(\
-                    [redner.float_ptr(d_specular[0].data_ptr())],
-                    [0],
-                    [0],
-                    3,
-                    redner.float_ptr(d_specular_uv_scale.data_ptr()))
+                if material.get_specular_size(0)[2] <= 0:
+                    d_specular_tex = redner.Texture3(\
+                        [redner.float_ptr(d_specular[0].data_ptr())],
+                        [0],
+                        [0],
+                        3,
+                        0,
+                        redner.float_ptr(d_specular_uv_scale.data_ptr()))
+                else:
+                    specular_size = material.get_specular_size(0)
+                    d_specular_tex = redner.Texture3(\
+                        [redner.float_ptr(d_specular[0].data_ptr())],
+                        [specular_size[0]],
+                        [specular_size[1]],
+                        3,
+                        specular_size[2],
+                        redner.float_ptr(d_specular_uv_scale.data_ptr()))
             else:
                 d_specular_tex = redner.Texture3(\
                     [redner.float_ptr(x.data_ptr()) for x in d_specular],
                     [x.shape[1] for x in d_specular],
                     [x.shape[0] for x in d_specular],
                     3,
+                    material.get_specular_size(0)[2],
                     redner.float_ptr(d_specular_uv_scale.data_ptr()))
 
             if d_roughness[0].dim() == 1:
-                d_roughness_tex = redner.Texture1(\
-                    [redner.float_ptr(d_roughness[0].data_ptr())],
-                    [0],
-                    [0],
-                    1,
-                    redner.float_ptr(d_roughness_uv_scale.data_ptr()))
+                if material.get_roughness_size(0)[2] <= 0:
+                    d_roughness_tex = redner.Texture1(\
+                        [redner.float_ptr(d_roughness[0].data_ptr())],
+                        [0],
+                        [0],
+                        1,
+                        0,
+                        redner.float_ptr(d_roughness_uv_scale.data_ptr()))
+                else:
+                    roughness_size = material.get_roughness_size(0)
+                    d_roughness_tex = redner.Texture1(\
+                        [redner.float_ptr(d_roughness[0].data_ptr())],
+                        [roughness_size[0]],
+                        [roughness_size[1]],
+                        1,
+                        roughness_size[2],
+                        redner.float_ptr(d_roughness_uv_scale.data_ptr()))
             else:
                 d_roughness_tex = redner.Texture1(\
                     [redner.float_ptr(x.data_ptr()) for x in d_roughness],
                     [x.shape[1] for x in d_roughness],
                     [x.shape[0] for x in d_roughness],
                     1,
+                    material.get_roughness_size(0)[2],
                     redner.float_ptr(d_roughness_uv_scale.data_ptr()))
 
             if d_generic is None:
                 d_generic_tex = redner.TextureN(\
-                    [], [], [], 0, redner.float_ptr(0))
+                    [], [], [], 0, 0, redner.float_ptr(0))
             else:
                 d_generic_tex = redner.TextureN(\
                     [redner.float_ptr(x.data_ptr()) for x in d_generic],
                     [x.shape[1] for x in d_generic],
                     [x.shape[0] for x in d_generic],
-                    d_generic[0].shape[2],
+                    material.get_generic_size(0)[0],
+                    material.get_generic_size(0)[3],
                     redner.float_ptr(d_generic_uv_scale.data_ptr()))
 
             if d_normal_map is None:
                 d_normal_map = redner.Texture3(\
-                    [], [], [], 0, redner.float_ptr(0))
+                    [], [], [], 0, 0, redner.float_ptr(0))
             else:
                 d_normal_map = redner.Texture3(\
                     [redner.float_ptr(x.data_ptr()) for x in d_normal_map],
                     [x.shape[1] for x in d_normal_map],
                     [x.shape[0] for x in d_normal_map],
                     3,
+                    material.get_normal_map_size(0)[2],
                     redner.float_ptr(d_normal_map_uv_scale.data_ptr()))
             buffers.d_materials.append(redner.DMaterial(\
                 d_diffuse_tex, d_specular_tex, d_roughness_tex,
@@ -961,6 +1056,7 @@ class RenderFunction(torch.autograd.Function):
                 [x.shape[1] for x in buffers.d_envmap_values],
                 [x.shape[0] for x in buffers.d_envmap_values],
                 3,
+                0,
                 redner.float_ptr(buffers.d_envmap_uv_scale.data_ptr()))
             buffers.d_world_to_env = torch.zeros(4, 4, device = device)
             buffers.d_envmap = redner.DEnvironmentMap(\
@@ -1117,14 +1213,17 @@ class RenderFunction(torch.autograd.Function):
             ret_list.append(None) # num_levels
             for d_diffuse in buffers.d_diffuse_list[i]:
                 ret_list.append(d_diffuse)
+            ret_list.append(None) # mesh colors
             ret_list.append(buffers.d_diffuse_uv_scale_list[i])
             ret_list.append(None) # num_levels
             for d_specular in buffers.d_specular_list[i]:
                 ret_list.append(d_specular)
+            ret_list.append(None) # mesh colors
             ret_list.append(buffers.d_specular_uv_scale_list[i])
             ret_list.append(None) # num_levels
             for d_roughness in buffers.d_roughness_list[i]:
                 ret_list.append(d_roughness)
+            ret_list.append(None) # mesh colors
             ret_list.append(buffers.d_roughness_uv_scale_list[i])
             if buffers.d_generic_list[i] is None:
                 ret_list.append(None) # num_levels
@@ -1132,6 +1231,7 @@ class RenderFunction(torch.autograd.Function):
                 ret_list.append(None) # num_levels
                 for d_generic in buffers.d_generic_list[i]:
                     ret_list.append(d_generic)
+                ret_list.append(None) # mesh colors
                 ret_list.append(buffers.d_generic_uv_scale_list[i])
             if buffers.d_normal_map_list[i] is None:
                 ret_list.append(None) # num_levels
@@ -1139,6 +1239,7 @@ class RenderFunction(torch.autograd.Function):
                 ret_list.append(None) # num_levels
                 for d_normal_map in buffers.d_normal_map_list[i]:
                     ret_list.append(d_normal_map)
+                ret_list.append(None) # mesh colors
                 ret_list.append(buffers.d_normal_map_uv_scale_list[i])
             ret_list.append(None) # compute_specular_lighting
             ret_list.append(None) # two sided
@@ -1155,6 +1256,7 @@ class RenderFunction(torch.autograd.Function):
             ret_list.append(None) # num_levels
             for d_values in buffers.d_envmap_values:
                 ret_list.append(d_values)
+            ret_list.append(None) # mesh colors
             ret_list.append(buffers.d_envmap_uv_scale)
             ret_list.append(None) # env_to_world
             ret_list.append(buffers.d_world_to_env.cpu())

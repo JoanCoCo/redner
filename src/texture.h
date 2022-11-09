@@ -17,8 +17,10 @@ struct Texture {
             const std::vector<int> &width,
             const std::vector<int> &height,
             int channels, // ignored if N=-1
+            int mesh_colors_resolution,
             ptr<float> uv_scale)
         : channels(channels),
+          mesh_colors_resolution(mesh_colors_resolution),
           uv_scale(uv_scale.get()) {
         if (texels.size() > max_num_texels) {
             std::cout << "[redner] Warning: a mipmap has size more than " << max_num_texels << ". " <<
@@ -42,6 +44,7 @@ struct Texture {
     int width[max_num_texels];
     int height[max_num_texels];
     int channels;
+    int mesh_colors_resolution;
     int num_levels; // how many texels are not nullptr
     float *uv_scale;
 };
@@ -322,6 +325,117 @@ inline void d_trilinear_interp(const Texture<N> &tex,
     }
 }
 
+const Real epsilon = 0.0001;
+
+DEVICE
+inline Real round_local(Real val) {
+	return floor(0.5f + val);
+}
+
+DEVICE
+inline int get_mesh_colors_index(const int tri_id, const int res, int i, int j) {
+	return tri_id * round_local((res + 1) * (res + 2) / 2) + round_local(i * (2 * res - i + 3) / 2) + j;
+}
+
+template <int N>
+DEVICE
+inline void mesh_colors_interp(const Texture<N> &tex,
+								const int tri_id,
+								const Vector2 &uv,
+								Real *output) {
+
+	auto channels = N == -1 ? tex.channels : N;
+	const int r = tex.mesh_colors_resolution;
+
+	const int i = floor(r * uv.x);
+	const int j = floor(r * uv.y);
+
+	const Real w = 1.0 - uv.x - uv.y;
+
+	const Real w_x = r * uv.x - i;
+	const Real w_y = r * uv.y - j;
+	const Real w_z = r * w - floor(r * w);
+
+	auto mc_ind0 = get_mesh_colors_index(tri_id, r, i + 1, j);
+	auto mc_ind1 = get_mesh_colors_index(tri_id, r, i, j + 1);
+	auto mc_ind2 = get_mesh_colors_index(tri_id, r, i, j);
+
+	if (w_x + w_y + w_z < epsilon) {
+		for (int i = 0; i < channels; i++) {
+			output[i] = tex.texels[0][channels * mc_ind2 + i];
+            assert(isfinite(output[i]));
+		}
+        return;
+	}
+
+	if (w_x + w_y + w_z < 2.0 - epsilon) {
+		for (int i = 0; i < channels; i++) {
+			auto c_i1j = tex.texels[0][channels * mc_ind0 + i];
+			auto c_ij1 = tex.texels[0][channels * mc_ind1 + i];
+			auto c_ij = tex.texels[0][channels * mc_ind2 + i];
+
+			output[i] = w_x * c_i1j + w_y * c_ij1 + w_z * c_ij;
+            assert(isfinite(output[i]));
+		}
+	}
+	else {
+		mc_ind2 = get_mesh_colors_index(tri_id, r, i + 1, j + 1);
+
+		for (int i = 0; i < channels; i++) {
+			auto c_i1j = tex.texels[0][channels * mc_ind0 + i];
+			auto c_ij1 = tex.texels[0][channels * mc_ind1 + i];
+			auto c_i1j1 = tex.texels[0][channels * mc_ind2 + i];
+
+			output[i] = (1.0 - w_x) * c_ij1 + (1.0 - w_y) * c_i1j + (1.0 - w_z) * c_i1j1;
+            assert(isfinite(output[i]));
+		}
+	}
+}
+
+template <int N>
+DEVICE
+inline void d_mesh_colors_interp(const Texture<N> &tex,
+								const int tri_id,
+								const Vector2 &uv,
+								const Real *d_output,
+								Texture<N> &d_tex) {
+
+	auto channels = N == -1 ? tex.channels : N;
+	const int r = tex.mesh_colors_resolution;
+
+	const int i = floor(r * uv.x);
+	const int j = floor(r * uv.y);
+
+	const Real w = 1.0 - uv.x - uv.y;
+
+	const Real w_x = r * uv.x - i;
+	const Real w_y = r * uv.y - j;
+	const Real w_z = r * w - floor(r * w);
+
+	if (w_x + w_y + w_z < epsilon) {
+		// No derivatives here pardner     
+		return;
+	}
+
+	auto mc_ind0 = get_mesh_colors_index(tri_id, r, i + 1, j);
+	auto mc_ind1 = get_mesh_colors_index(tri_id, r, i, j + 1);
+	auto mc_ind2 = (w_x + w_y + w_z < 2 - epsilon) ? 
+		get_mesh_colors_index(tri_id, r, i, j) :
+		get_mesh_colors_index(tri_id, r, i + 1, j + 1);
+
+	for (int i = 0; i < channels; i++) {
+        assert(isfinite(d_output[i] * w_x));
+        assert(isfinite(d_output[i] * w_y));
+        assert(isfinite(d_output[i] * w_z));
+
+		atomic_add(&d_tex.texels[0][channels * mc_ind0 + i], d_output[i] * w_x);
+		atomic_add(&d_tex.texels[0][channels * mc_ind1 + i], d_output[i] * w_y);
+		atomic_add(&d_tex.texels[0][channels * mc_ind2 + i], d_output[i] * w_z);
+	}
+}
+
+
+
 template <int N>
 DEVICE
 inline void get_texture_value_constant(const Texture<N> &tex,
@@ -335,14 +449,18 @@ inline void get_texture_value_constant(const Texture<N> &tex,
 template <typename TextureType>
 DEVICE
 inline void get_texture_value(const TextureType &tex,
+                              const int tri_id_,
                               const Vector2 &uv_,
+                              const Vector2 &tri_uv_,
                               const Vector2 &du_dxy_,
                               const Vector2 &dv_dxy_,
                               Real *output) {
     if (tex.width[0] <= 0 && tex.height[0] <= 0) {
         // Constant texture
         get_texture_value_constant(tex, output);
-    } else {
+    } else if (tex.mesh_colors_resolution > 0) {
+		mesh_colors_interp(tex, tri_id_, tri_uv_, output);
+	} else {
         // Trilinear interpolation
         auto uv_scale = Vector2f{tex.uv_scale[0], tex.uv_scale[1]};
         auto uv = uv_ * uv_scale;
@@ -357,7 +475,9 @@ inline void get_texture_value(const TextureType &tex,
 template <int N>
 DEVICE
 inline void d_get_texture_value(const Texture<N> &tex,
+                                const int tri_id_,
                                 const Vector2 &uv_,
+                                const Vector2 &tri_uv_,
                                 const Vector2 &du_dxy_,
                                 const Vector2 &dv_dxy_,
                                 const Real *d_output,
@@ -372,7 +492,9 @@ inline void d_get_texture_value(const Texture<N> &tex,
         for (int i = 0; i < channels; i++) {
             atomic_add(d_tex.texels[0][i], d_output[i]);
         }
-    } else {
+    } else if (tex.mesh_colors_resolution > 0) {
+		d_mesh_colors_interp(tex, tri_id_, tri_uv_, d_output, d_tex);
+	} else {
         // Trilinear interpolation
         auto uv_scale = Vector2f{tex.uv_scale[0], tex.uv_scale[1]};
         auto uv = uv_ * uv_scale;

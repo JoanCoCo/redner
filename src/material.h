@@ -33,51 +33,56 @@ struct Material {
         return diffuse_reflectance.num_levels;
     }
 
-    inline std::tuple<int, int> get_diffuse_size(int i) const {
+    inline std::tuple<int, int, int> get_diffuse_size(int i) const {
         return std::make_tuple(
             diffuse_reflectance.width[i],
-            diffuse_reflectance.height[i]);
+            diffuse_reflectance.height[i],
+            diffuse_reflectance.mesh_colors_resolution);
     }
 
     inline int get_specular_levels() const {
         return specular_reflectance.num_levels;
     }
 
-    inline std::tuple<int, int> get_specular_size(int i) const {
+    inline std::tuple<int, int, int> get_specular_size(int i) const {
         return std::make_tuple(
             specular_reflectance.width[i],
-            specular_reflectance.height[i]);
+            specular_reflectance.height[i],
+            specular_reflectance.mesh_colors_resolution);
     }
 
     inline int get_roughness_levels() const {
         return roughness.num_levels;
     }
 
-    inline std::tuple<int, int> get_roughness_size(int i) const {
+    inline std::tuple<int, int, int> get_roughness_size(int i) const {
         return std::make_tuple(
             roughness.width[i],
-            roughness.height[i]);
+            roughness.height[i],
+            roughness.mesh_colors_resolution);
     }
 
     inline int get_generic_levels() const {
         return generic_texture.num_levels;
     }
 
-    inline std::tuple<int, int, int> get_generic_size(int i) const {
+    inline std::tuple<int, int, int, int> get_generic_size(int i) const {
         return std::make_tuple(
             generic_texture.channels,
             generic_texture.width[i],
-            generic_texture.height[i]);
+            generic_texture.height[i],
+            generic_texture.mesh_colors_resolution);
     }
 
     inline int get_normal_map_levels() const {
         return normal_map.num_levels;
     }
 
-    inline std::tuple<int, int> get_normal_map_size(int i) const {
+    inline std::tuple<int, int, int> get_normal_map_size(int i) const {
         return std::make_tuple(
             normal_map.width[i],
-            normal_map.height[i]);
+            normal_map.height[i],
+            normal_map.mesh_colors_resolution);
     }
 
     Texture3 diffuse_reflectance;
@@ -111,7 +116,9 @@ inline Vector3 get_diffuse_reflectance(const Material &material,
                                        const SurfacePoint &shading_point) {
     Vector3 ret;
     get_texture_value(material.diffuse_reflectance,
+                      shading_point.tri_id,
                       shading_point.uv,
+                      shading_point.tri_uv,
                       shading_point.du_dxy,
                       shading_point.dv_dxy,
                       &ret.x);
@@ -125,7 +132,9 @@ inline void d_get_diffuse_reflectance(const Material &material,
                                       Texture3 &d_texture,
                                       SurfacePoint &d_shading_point) {
     d_get_texture_value(material.diffuse_reflectance,
+                        shading_point.tri_id,
                         shading_point.uv,
+                        shading_point.tri_uv,
                         shading_point.du_dxy,
                         shading_point.dv_dxy,
                         &d_output.x,
@@ -140,7 +149,9 @@ inline Vector3 get_specular_reflectance(const Material &material,
                                         const SurfacePoint &shading_point) {
     Vector3 ret;
     get_texture_value(material.specular_reflectance,
+                      shading_point.tri_id,
                       shading_point.uv,
+                      shading_point.tri_uv,
                       shading_point.du_dxy,
                       shading_point.dv_dxy,
                       &ret.x);
@@ -154,7 +165,9 @@ inline void d_get_specular_reflectance(const Material &material,
                                        Texture3 &d_texture,
                                        SurfacePoint &d_shading_point) {
     d_get_texture_value(material.specular_reflectance,
+                        shading_point.tri_id,
                         shading_point.uv,
+                        shading_point.tri_uv,
                         shading_point.du_dxy,
                         shading_point.dv_dxy,
                         &d_output.x,
@@ -169,7 +182,9 @@ inline Real get_roughness(const Material &material,
                           const SurfacePoint &shading_point) {
     Real ret;
     get_texture_value(material.roughness,
+                      shading_point.tri_id,
                       shading_point.uv,
+                      shading_point.tri_uv,
                       shading_point.du_dxy,
                       shading_point.dv_dxy,
                       &ret);
@@ -183,7 +198,9 @@ inline void d_get_roughness(const Material &material,
                             Texture1 &d_texture,
                             SurfacePoint &d_shading_point) {
     d_get_texture_value(material.roughness,
+                        shading_point.tri_id,
                         shading_point.uv,
+                        shading_point.tri_uv,
                         shading_point.du_dxy,
                         shading_point.dv_dxy,
                         &d_output,
@@ -198,7 +215,9 @@ inline void get_generic_texture(const Material &material,
                                 const SurfacePoint &shading_point,
                                 Real *output) {
     return get_texture_value(material.generic_texture,
+                             shading_point.tri_id,
                              shading_point.uv,
+                             shading_point.tri_uv,
                              shading_point.du_dxy,
                              shading_point.dv_dxy,
                              output);
@@ -211,7 +230,9 @@ inline void d_get_generic_texture(const Material &material,
                                   TextureN &d_texture,
                                   SurfacePoint &d_shading_point) {
     d_get_texture_value(material.generic_texture,
+                        shading_point.tri_id,
                         shading_point.uv,
+                        shading_point.tri_uv,
                         shading_point.du_dxy,
                         shading_point.dv_dxy,
                         d_output,
@@ -232,7 +253,9 @@ inline Vector3 get_normal(const Material &material,
                           const SurfacePoint &shading_point) {
     Vector3 ret;
     get_texture_value(material.normal_map,
+                      shading_point.tri_id,
                       shading_point.uv,
+                      shading_point.tri_uv,
                       shading_point.du_dxy,
                       shading_point.dv_dxy,
                       &ret.x);
@@ -246,7 +269,9 @@ inline void d_get_normal(const Material &material,
                          Texture3 &d_texture,
                          SurfacePoint &d_shading_point) {
     d_get_texture_value(material.normal_map,
+                        shading_point.tri_id,
                         shading_point.uv,
+                        shading_point.tri_uv,
                         shading_point.du_dxy,
                         shading_point.dv_dxy,
                         &d_output.x,
